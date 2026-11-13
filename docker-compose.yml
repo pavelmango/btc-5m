@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  # Module 1: Ingestion Service (24/7 PM 5m + Kalshi 15m + Spot Feed)
+  ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: btc5m-ingestion
+    restart: unless-stopped
+    command: ["scripts/run_collector.py"]
+    environment:
+      - LIVE_MODE=false
+      - ENVIRONMENT=paper
+      - DB_PATH=/data/btc5m_history.duckdb
+      - METRICS_PORT=9102
+    volumes:
+      - btc5m-data:/data
+    ports:
+      - "9102:9102"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9102/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Module 2: Paper Execution Simulator & Consilium Runner
+  paper-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: btc5m-paper-simulator
+    restart: unless-stopped
+    command: ["scripts/run_paper_sim.py"]
+    environment:
+      - LIVE_MODE=false
+      - ENVIRONMENT=paper
+      - DB_PATH=/data/btc5m_history.duckdb
+    volumes:
+      - btc5m-data:/data
+    depends_on:
+      - ingestion
+
+  # Module 3: Observability & SLA Gap Monitor
+  observability:
+    image: prom/prometheus:v2.51.0
+    container_name: btc5m-observability
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - btc5m-metrics:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - ingestion
+
+volumes:
+  btc5m-data:
+    driver: local
+  btc5m-metrics:
+    driver: local
